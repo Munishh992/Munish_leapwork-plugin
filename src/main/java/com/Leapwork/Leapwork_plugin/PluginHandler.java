@@ -8,6 +8,7 @@ import java.io.StringWriter;
 import java.io.OutputStream;
 import java.net.ConnectException;
 import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.UnknownHostException;
 import java.nio.file.Paths;
 import java.nio.charset.StandardCharsets;
@@ -154,13 +155,96 @@ public final class PluginHandler {
 
 	public String getControllerApiHttpAdderess(String hostname, String rawPort, boolean enableHttps,
 			TaskListener listener) {
-		StringBuilder stringBuilder = new StringBuilder();
+		String trimmedInput = normalizeUrlQuerySeparators((hostname == null ? STRING_EMPTY : hostname).trim());
 		int port = getPortNumber(rawPort, enableHttps, listener);
-		if (enableHttps)
-			stringBuilder.append("https://").append(hostname).append(":").append(port);
-		else
-			stringBuilder.append("http://").append(hostname).append(":").append(port);
-		return stringBuilder.toString();
+		String scheme = enableHttps ? "https" : "http";
+
+		try {
+			URI parsedUri;
+			URI controllerApiHttpAddress;
+
+			// Accept either a full URL or a shorthand host/path/query input.
+			if (isAbsoluteUri(trimmedInput)) {
+				parsedUri = new URI(trimmedInput);
+				controllerApiHttpAddress = new URI(parsedUri.getScheme(), null, parsedUri.getHost(),
+						parsedUri.getPort() == -1 ? port : parsedUri.getPort(), ensureRootPath(parsedUri.getPath()),
+						parsedUri.getQuery(), null);
+			} else {
+				String uriCandidate;
+				if (trimmedInput.contains("/") || trimmedInput.contains("?") || trimmedInput.contains(":"))
+					uriCandidate = String.format("%s://%s", scheme, trimmedInput);
+				else
+					uriCandidate = String.format("%s://%s:%d", scheme, trimmedInput, port);
+
+				parsedUri = new URI(uriCandidate);
+				if (parsedUri.getHost() == null)
+					throw new IllegalArgumentException(Messages.INVALID_CONTROLLER_URL);
+
+				controllerApiHttpAddress = new URI(parsedUri.getScheme(), null, parsedUri.getHost(),
+						parsedUri.getPort() == -1 ? port : parsedUri.getPort(), ensureRootPath(parsedUri.getPath()),
+						parsedUri.getQuery(), null);
+			}
+
+			return controllerApiHttpAddress.toString();
+		} catch (URISyntaxException e) {
+			throw new IllegalArgumentException(Messages.INVALID_CONTROLLER_URL, e);
+		}
+	}
+
+	private boolean isAbsoluteUri(String input) {
+		try {
+			if (input == null || input.isEmpty())
+				return false;
+
+			URI uri = new URI(input);
+			String scheme = uri.getScheme();
+			return uri.isAbsolute() && uri.getHost() != null
+					&& ("http".equalsIgnoreCase(scheme) || "https".equalsIgnoreCase(scheme));
+		} catch (URISyntaxException e) {
+			return false;
+		}
+	}
+
+	private String normalizeUrlQuerySeparators(String input) {
+		if (Utils.isBlank(input))
+			return input;
+
+		int firstQuestionMarkIndex = input.indexOf('?');
+		if (firstQuestionMarkIndex < 0)
+			return input;
+
+		String pathPart = input.substring(0, firstQuestionMarkIndex + 1);
+		String queryPart = input.substring(firstQuestionMarkIndex + 1).replace("?", "&");
+		return pathPart + queryPart;
+	}
+
+	private String ensureRootPath(String path) {
+		return Utils.isBlank(path) ? "/" : path;
+	}
+
+	private String buildControllerApiUri(String controllerApiHttpAddress, String relativePath) {
+		return buildControllerApiUri(controllerApiHttpAddress, relativePath, STRING_EMPTY);
+	}
+
+	private String buildControllerApiUri(String controllerApiHttpAddress, String relativePath, String extraQuery) {
+		try {
+			URI baseUri = new URI(controllerApiHttpAddress);
+			String basePath = ensureRootPath(baseUri.getPath());
+			String normalizedBasePath = basePath.replaceAll("/+$", "");
+			String normalizedRelativePath = (relativePath == null ? STRING_EMPTY : relativePath).replaceFirst("^/+", "");
+			String baseQuery = baseUri.getQuery();
+			String normalizedExtraQuery = (extraQuery == null ? STRING_EMPTY : extraQuery).replaceFirst("^\\?", "");
+			String finalQuery = baseQuery;
+
+			if (!Utils.isBlank(normalizedExtraQuery))
+				finalQuery = Utils.isBlank(baseQuery) ? normalizedExtraQuery : baseQuery + "&" + normalizedExtraQuery;
+
+			URI finalUri = new URI(baseUri.getScheme(), null, baseUri.getHost(), baseUri.getPort(),
+					normalizedBasePath + "/" + normalizedRelativePath, finalQuery, null);
+			return finalUri.toString();
+		} catch (URISyntaxException e) {
+			throw new IllegalArgumentException(Messages.INVALID_CONTROLLER_URL, e);
+		}
 	}
 
 	private int getPortNumber(String rawPortStr, boolean enableHttps, TaskListener listener) {
@@ -211,7 +295,7 @@ public final class PluginHandler {
 
 		LinkedHashMap<UUID, String> schedulesIdTitleHashMap = new LinkedHashMap<>();
 
-		String scheduleListUri = String.format(Messages.GET_ALL_AVAILABLE_SCHEDULES_URI, controllerApiHttpAddress);
+		String scheduleListUri = buildControllerApiUri(controllerApiHttpAddress, Messages.GET_ALL_AVAILABLE_SCHEDULES_PATH);
 
 		try {
 			Response response = client.prepareGet(scheduleListUri).setHeader("AccessKey", accessKey).execute().get();
@@ -324,8 +408,8 @@ public final class PluginHandler {
 			String scheduleTitle, TaskListener listener, LeapworkRun run, String scheduleVariablesRequestPart)
 			throws Exception {
 
-		String uri = String.format(Messages.RUN_SCHEDULE_URI, controllerApiHttpAddress, scheduleId.toString(),
-				scheduleVariablesRequestPart);
+		String uri = buildControllerApiUri(controllerApiHttpAddress,
+				String.format(Messages.RUN_SCHEDULE_PATH, scheduleId.toString()), scheduleVariablesRequestPart);
 
 		try {
 			Response response = client.preparePut(uri).setHeader("AccessKey", accessKey).setBody("").execute().get();
@@ -416,7 +500,7 @@ public final class PluginHandler {
 		boolean isSuccessfullyStopped = false;
 
 		listener.error(String.format(Messages.STOPPING_RUN, scheduleTitle, runId));
-		String uri = String.format(Messages.STOP_RUN_URI, controllerApiHttpAddress, runId.toString());
+		String uri = buildControllerApiUri(controllerApiHttpAddress, String.format(Messages.STOP_RUN_PATH, runId.toString()));
 
 		AsyncHttpClientConfig config = new AsyncHttpClientConfig.Builder()
 											.setReadTimeout(timeout * 1000)
@@ -603,7 +687,7 @@ public final class PluginHandler {
 	public String getRunStatus(AsyncHttpClient client, String controllerApiHttpAddress, String accessKey, UUID runId)
 			throws Exception {
 
-		String uri = String.format(Messages.GET_RUN_STATUS_URI, controllerApiHttpAddress, runId.toString());
+		String uri = buildControllerApiUri(controllerApiHttpAddress, String.format(Messages.GET_RUN_STATUS_PATH, runId.toString()));
 
 		Response response = client.prepareGet(uri).setHeader("AccessKey", accessKey).execute().get();
 
@@ -648,7 +732,7 @@ public final class PluginHandler {
 
 	public List<UUID> getRunRunItems(AsyncHttpClient client, String controllerApiHttpAddress, String accessKey,
 			UUID runId) throws Exception {
-		String uri = String.format(Messages.GET_RUN_ITEMS_IDS_URI, controllerApiHttpAddress, runId.toString());
+		String uri = buildControllerApiUri(controllerApiHttpAddress, String.format(Messages.GET_RUN_ITEMS_IDS_PATH, runId.toString()));
 
 		Response response = client.prepareGet(uri).setHeader("AccessKey", accessKey).execute().get();
 
@@ -714,7 +798,7 @@ public final class PluginHandler {
 			String scheduleTitle, boolean doneStatusAsSuccess, boolean writePassedKeyframes,
 			final TaskListener listener) throws Exception {
 
-		String uri = String.format(Messages.GET_RUN_ITEM_URI, controllerApiHttpAddress, runItemId.toString());
+		String uri = buildControllerApiUri(controllerApiHttpAddress, String.format(Messages.GET_RUN_ITEM_PATH, runItemId.toString()));
 
 		Response response = client.prepareGet(uri).setHeader("AccessKey", accessKey).execute().get();
 
@@ -806,7 +890,7 @@ public final class PluginHandler {
 			UUID runItemId, RunItem runItem, String scheduleTitle, String agentTitle, final TaskListener listener)
 			throws Exception {
 
-		String uri = String.format(Messages.GET_RUN_ITEM_KEYFRAMES_URI, controllerApiHttpAddress, runItemId.toString());
+		String uri = buildControllerApiUri(controllerApiHttpAddress, String.format(Messages.GET_RUN_ITEM_KEYFRAMES_PATH, runItemId.toString()));
 
 		Response response = client.prepareGet(uri).setHeader("AccessKey", accessKey).execute().get();
 

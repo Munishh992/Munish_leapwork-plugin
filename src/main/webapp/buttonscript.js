@@ -181,17 +181,12 @@ function normalizeUrlQuerySeparators(input) {
 function getControllerApiAddress(hostnameOrUrl, rawPort, enableHttps) {
     const trimmedInput = normalizeUrlQuerySeparators((hostnameOrUrl || "").trim());
     const scheme = enableHttps ? "https" : "http";
-    let url;
-
-    try {
-        url = new URL(trimmedInput);
-    } catch (error) {
-        if (trimmedInput.includes("/") || trimmedInput.includes("?") || trimmedInput.includes(":")) {
-            url = new URL(`${scheme}://${trimmedInput}`);
-        } else {
-            url = new URL(`${scheme}://${trimmedInput}:${rawPort}`);
-        }
-    }
+    const candidate = trimmedInput.startsWith("http://") || trimmedInput.startsWith("https://")
+        ? trimmedInput
+        : (trimmedInput.includes("/") || trimmedInput.includes("?")
+            ? `${scheme}://${trimmedInput}`
+            : `${scheme}://${trimmedInput}:${rawPort}`);
+    const url = new URL(candidate);
 
     if (!url.port) {
         url.port = rawPort;

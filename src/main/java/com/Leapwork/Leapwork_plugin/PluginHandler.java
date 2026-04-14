@@ -172,10 +172,12 @@ public final class PluginHandler {
 			if (parsedUri.getHost() == null)
 				throw new IllegalArgumentException(Messages.INVALID_CONTROLLER_URL);
 
-			return new URI(parsedUri.getScheme(), null, parsedUri.getHost(),
+			String controllerApiHttpAddress = new URI(parsedUri.getScheme(), null, parsedUri.getHost(),
 					parsedUri.getPort() == -1 ? port : parsedUri.getPort(),
 					Utils.isBlank(parsedUri.getPath()) ? "/" : parsedUri.getPath(), parsedUri.getQuery(), null)
 							.toString();
+			listener.getLogger().println("Leapwork controller API URL: " + controllerApiHttpAddress);
+			return controllerApiHttpAddress;
 		} catch (URISyntaxException e) {
 			throw new IllegalArgumentException(Messages.INVALID_CONTROLLER_URL, e);
 		}
@@ -380,6 +382,7 @@ public final class PluginHandler {
 				String.format(Messages.RUN_SCHEDULE_URI, scheduleId.toString()), scheduleVariablesRequestPart);
 
 		try {
+			listener.getLogger().println("Leapwork request URL: " + uri);
 			Response response = client.preparePut(uri).setHeader("AccessKey", accessKey).setBody("").execute().get();
 
 			switch (response.getStatusCode()) {

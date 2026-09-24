@@ -63,3 +63,5 @@ steps{
 - If you catch an error "No such run [runId]!" after schedule starting, increase time delay parameter in "advanced".
 
 # Screenshots
+
+- Git versioning access validated by Leapwork at 2026-09-24 08:55:03 UTC.
